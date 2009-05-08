@@ -1,0 +1,9 @@
+
+* Instruction
+
+To use check_tw with net-snmp, put a following line to snmpd.conf
+
+-----
+exec TW_RAID /usr/sbin/check_tw
+-----
+
