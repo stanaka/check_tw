@@ -1,0 +1,176 @@
+#!/usr/bin/perl
+# implemented by Hideoki Yoshikawa
+
+use strict;
+use warnings;
+use Data::Dumper;
+use FindBin;
+use Getopt::Long;
+
+our $VERSION = '0.4';
+
+my $CLI;
+BEGIN {
+    $CLI = $FindBin::Bin . '/tw_cli';
+    unless (-x $CLI) {
+        $CLI = `which tw_cli`;
+        chomp $CLI;
+        die "not found tw_cli";
+    }
+}
+
+# exit status for nagios
+use constant OK => 0;
+use constant WARNING => 1;
+use constant CRITICAL => 2;
+use constant UNKNOWN => 3;
+
+our @error_messages;
+our $forcus = '/';
+our $warning = 0;
+our $critical = 0;
+
+
+#---------------------------------------------------------------------
+# Main
+# GET Controllers
+$< == 0 or do {
+    warn "Only root can run this program.\n";
+    exit UNKNOWN;
+};
+
+GetOptions("skip-check-bbu", \my $skip_check_bbu);
+
+
+my ($controllers) = cmd_execute('show');
+if (!$controllers || @$controllers == 0) {
+    print "UNKNOWN: No controller.\n";
+    exit UNKNOWN;
+}
+
+for my $cntl (@$controllers) {
+    local $forcus = '/' . $cntl->{Ctl};
+    my ($units, $ports, $bbus) = cmd_execute($forcus, 'show');
+
+    for my $unit (@$units) {
+        check_unit($unit->{Unit});
+    }
+
+    for my $port (@$ports) {
+        critical(sprintf("Port: %s, Status: %s, Serial: %s",
+                     $port->{Port}, $port->{Status}, $port->{Serial})
+         ) unless $port->{Status} =~ /OK|NOT-PRESENT/;
+    }
+
+    # check BBU
+    if ($skip_check_bbu) {
+        push @error_messages, '(skip checking BBU)';
+    } else {
+        if (my $bbu = $bbus->[0]) {
+            critical("BBU OnlineState: " . $bbu->{OnlineState}) unless $bbu->{OnlineState} eq 'On';
+
+            if ($bbu->{Status} eq 'WeakBat') {
+                warning(sprintf("BBU %s: %s", 'Status', $bbu->{Status}))
+            }
+            elsif ($bbu->{Status} ne 'OK') {
+                critical(sprintf("BBU %s: %s", 'Status', $bbu->{Status}))
+            }
+
+            for my $col (qw(Volt) ) {
+                critical(sprintf("BBU %s: %s", $col, $bbu->{$col}))
+                    unless $bbu->{$col} eq 'OK'
+            }
+            critical(sprintf("BBU %s: %s", 'Temp', $bbu->{Temp})) unless $bbu->{Temp} eq 'OK' || $bbu->{Temp} eq 'High';
+        }
+        else {
+            push @error_messages, '(non BBU)';
+        }
+    }
+}
+
+if ($critical) {
+    print "CRITICAL: ";
+    print $_, "\n" for @error_messages;
+    print scalar(@error_messages), " errors.\n";
+
+    exit CRITICAL;
+}
+if ($warning) {
+    print "WARNING: ";
+    print $_, "\n" for @error_messages;
+    print scalar(@error_messages), " errors.\n";
+    exit WARNING;
+}
+
+if (@error_messages) {
+    print "OK: ";
+    print $_, "\n" for @error_messages;
+}
+else {
+    print "OK\n";
+}
+exit 0;
+
+#---------------------------------------------------------------------
+sub check_unit {
+    my $unit = shift;
+    local $forcus = $forcus . '/' . $unit;
+
+    my ($subunits) = cmd_execute($forcus, 'show');
+    for my $su (@$subunits) {
+        $su->{UnitType} =~ /^(?:RAID|DISK)/ or next;
+        critical(sprintf("Unit: %s, Type: %s, Status: %s",
+                     $su->{Unit}, $su->{UnitType}, $su->{Status})
+         ) unless $su->{Status} eq 'OK';
+    }
+}
+
+# execute cmd and parse result.
+sub cmd_execute {
+    open my $fh, '-|', $CLI, @_;
+    chomp(my $d = <$fh>); # dummy
+    $d eq '' or die $d;
+    my @tables;
+    my $table;
+    push @tables, $table while $table = parse_table($fh);
+
+    close $fh;
+    return @tables;
+}
+
+sub parse_table {
+    my $fh = shift;
+
+    defined(my $head = <$fh>) or return;
+    chomp($head);
+
+    my @col_head = $head =~ /(\S+\s*)/g;
+
+    my @col = map { /(\S+)/ } @col_head;
+    my $format = join ' ', map { 'A' . length } @col_head;
+    $format =~ s/\d+$/*/; ## for overrun
+
+    chomp(my $d = <$fh>); # dummy
+    $d =~ /^-+$/ or return;
+    my @rows;
+    while (<$fh>) {
+        chomp;
+        last if $_ eq '';
+        my %row;
+        @row{@col} = map { /(\S.*\S?)/} unpack $format, $_;
+        push @rows, \%row;
+    }
+    return \@rows;
+}
+
+sub warning {
+    my $message = shift;
+    $warning = 1;
+    push @error_messages, $message;
+}
+
+sub critical {
+    my $message = shift;
+    $critical = 1;
+    push @error_messages, $message;
+}
