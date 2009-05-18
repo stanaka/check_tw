@@ -15,7 +15,7 @@ BEGIN {
     unless (-x $CLI) {
         $CLI = `which tw_cli`;
         chomp $CLI;
-        die "not found tw_cli";
+        die "not found tw_cli" unless -x $CLI;
     }
 }
 
