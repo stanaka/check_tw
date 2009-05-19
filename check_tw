@@ -119,9 +119,15 @@ sub check_unit {
     my ($subunits) = cmd_execute($forcus, 'show');
     for my $su (@$subunits) {
         $su->{UnitType} =~ /^(?:RAID|DISK)/ or next;
-        critical(sprintf("Unit: %s, Type: %s, Status: %s",
-                     $su->{Unit}, $su->{UnitType}, $su->{Status})
-         ) unless $su->{Status} eq 'OK';
+        if ($su->{Status} eq 'OK') {
+            next;
+        } elsif ($su->{Status} eq 'VERIFYING') {
+            warning(sprintf("Unit: %s, Type: %s, Status: %s",
+                            $su->{Unit}, $su->{UnitType}, $su->{Status}));
+        } else {
+            critical(sprintf("Unit: %s, Type: %s, Status: %s",
+                             $su->{Unit}, $su->{UnitType}, $su->{Status}))
+        }
     }
 }
 
