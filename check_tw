@@ -127,7 +127,15 @@ sub check_unit {
 
 # execute cmd and parse result.
 sub cmd_execute {
-    open my $fh, '-|', $CLI, @_;
+    my $fh;
+    if ($ENV{DEBUG_TW_CLI_DATA}) {
+        my $show_arg = join '_', @_; # c0_show, c0u0_show
+        $show_arg =~ s@/@@g;
+        my $tw_cli_file = $ENV{DEBUG_TW_CLI_DATA}.'_'.$show_arg;
+        open $fh, '<', $tw_cli_file;
+    } else {
+        open $fh, '-|', $CLI, @_;
+    }
     chomp(my $d = <$fh>); # dummy
     $d eq '' or die $d;
     my @tables;
